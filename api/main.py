@@ -104,6 +104,15 @@ def _save_upload_to_temp(image: UploadFile) -> str:
     return path
 
 
+def _validate_detector(detector: str) -> str:
+    if not isinstance(detector, str):
+        raise HTTPException(status_code=400, detail=f"invalid detector parameter: {detector!r}")
+    norm = detector.strip().lower().replace("_", "-")
+    if norm in ("classical", "ml", "ml-gated", "gated-ml"):
+        return norm
+    raise HTTPException(status_code=400, detail=f"detector must be 'classical', 'ml', or 'ml-gated', got {detector!r}")
+
+
 def _run_detector(detector_name: str, image_path: str):
     detector = get_detector(detector_name)
     try:
@@ -123,7 +132,12 @@ def health():
     ml_available = os.path.exists(
         os.path.join(os.path.dirname(__file__), "..", "experiments", "m4_2", "results", "dot_heatmap_net_v2.pt")
     )
-    return {"status": "ok", "classical_detector_available": True, "ml_detector_available": ml_available}
+    return {
+        "status": "ok",
+        "classical_detector_available": True,
+        "ml_detector_available": ml_available,
+        "gated_detector_available": ml_available,
+    }
 
 
 @app.get("/api/v1/model")
@@ -133,9 +147,11 @@ def model_info():
     )
     exists = os.path.exists(checkpoint_path)
     from experiments.m4_2.model import MODEL_INPUT_SIZE, HEATMAP_SIZE
-    from experiments.m4_2.ml_lattice_detector import MODEL_VERSION
+    from experiments.m4_2.ml_lattice_detector import MODEL_VERSION as UNGATED_VERSION
+    from experiments.m4_2.gated_ml_lattice_detector import MODEL_VERSION as GATED_VERSION
     return {
-        "ml_model_version": MODEL_VERSION if exists else None,
+        "ml_model_version": UNGATED_VERSION if exists else None,
+        "gated_model_version": GATED_VERSION if exists else None,
         "ml_checkpoint_exists": exists,
         "ml_model_input_size": MODEL_INPUT_SIZE if exists else None,
         "ml_heatmap_size": HEATMAP_SIZE if exists else None,
@@ -145,12 +161,11 @@ def model_info():
 
 @app.post("/api/v1/detect")
 def detect(image: UploadFile = File(...), detector: str = Form("classical")):
-    if detector not in ("classical", "ml"):
-        raise HTTPException(status_code=400, detail=f"detector must be 'classical' or 'ml', got {detector!r}")
+    detector_norm = _validate_detector(detector)
 
     path = _save_upload_to_temp(image)
     try:
-        result = _run_detector(detector, path)
+        result = _run_detector(detector_norm, path)
     finally:
         os.unlink(path)  # never persist uploaded images
 
@@ -167,12 +182,11 @@ def detect(image: UploadFile = File(...), detector: str = Form("classical")):
 
 @app.post("/api/v1/analyze")
 def analyze(image: UploadFile = File(...), detector: str = Form("classical")):
-    if detector not in ("classical", "ml"):
-        raise HTTPException(status_code=400, detail=f"detector must be 'classical' or 'ml', got {detector!r}")
+    detector_norm = _validate_detector(detector)
 
     path = _save_upload_to_temp(image)
     try:
-        result = _run_detector(detector, path)
+        result = _run_detector(detector_norm, path)
     finally:
         os.unlink(path)
 
@@ -205,12 +219,11 @@ def analyze(image: UploadFile = File(...), detector: str = Form("classical")):
 
 @app.post("/api/v1/reconstruct")
 def reconstruct(image: UploadFile = File(...), detector: str = Form("classical")):
-    if detector not in ("classical", "ml"):
-        raise HTTPException(status_code=400, detail=f"detector must be 'classical' or 'ml', got {detector!r}")
+    detector_norm = _validate_detector(detector)
 
     path = _save_upload_to_temp(image)
     try:
-        result = _run_detector(detector, path)
+        result = _run_detector(detector_norm, path)
     finally:
         os.unlink(path)
 

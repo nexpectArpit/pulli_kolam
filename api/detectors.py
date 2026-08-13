@@ -138,13 +138,68 @@ class MLDetector:
         )
 
 
+class GatedMLDetector:
+    """Wraps experiments/m4_2/gated_ml_lattice_detector.py's
+    GatedLearnedLatticeDetectorV2. Raises explicitly (does NOT silently fall
+    back to classical) if the checkpoint is missing or inference fails.
+    Loaded lazily and cached on first use."""
+
+    name = "ml-gated"
+
+    def __init__(self):
+        self._detector = None
+        self.model_version = None
+
+    def _ensure_loaded(self):
+        if self._detector is None:
+            from experiments.m4_2.gated_ml_lattice_detector import GatedLearnedLatticeDetectorV2
+            from experiments.m4_2.ml_lattice_detector import MalformedOutputError
+            try:
+                self._detector = GatedLearnedLatticeDetectorV2()
+            except (MalformedOutputError, RuntimeError, FileNotFoundError) as e:
+                raise RuntimeError(f"Gated ML detector unavailable: {e}") from e
+            self.model_version = self._detector.model_version
+
+    def detect(self, image_path: str) -> DetectionResult:
+        self._ensure_loaded()
+        t0 = time.monotonic()
+        img = cv2.imread(image_path)
+        if img is None:
+            raise FileNotFoundError(f"could not read image: {image_path}")
+        h, w = img.shape[:2]
+
+        preprocessed = image_io.preprocess(image_path)
+        lattice = self._detector(preprocessed)
+        edges = image_io.trace_path(preprocessed, lattice)
+
+        graph = nx.MultiGraph()
+        graph.add_nodes_from(lattice.lattice_coords)
+        for a, b in edges:
+            graph.add_edge(a, b)
+
+        dots_original = _undo_deskew(lattice.pixel_positions, preprocessed.rotation_deg, w, h)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+
+        return DetectionResult(
+            detector=self.name, model_version=self.model_version, dots=dots_original,
+            width=w, height=h, processing_ms=elapsed_ms, graph=graph,
+        )
+
+
 _CLASSICAL = ClassicalDetector()
 _ML = MLDetector()
+_ML_GATED = GatedMLDetector()
 
 
 def get_detector(name: str):
-    if name == "classical":
+    if not isinstance(name, str):
+        raise ValueError(f"unknown detector {name!r}; must be 'classical', 'ml', or 'ml-gated'")
+    normalized = name.strip().lower().replace("_", "-")
+    if normalized == "classical":
         return _CLASSICAL
-    if name == "ml":
+    if normalized == "ml":
         return _ML
-    raise ValueError(f"unknown detector {name!r}; must be 'classical' or 'ml'")
+    if normalized in {"ml-gated", "gated-ml"}:
+        return _ML_GATED
+    raise ValueError(f"unknown detector {name!r}; must be 'classical', 'ml', or 'ml-gated'")
+
